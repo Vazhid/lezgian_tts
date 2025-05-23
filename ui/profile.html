@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Личный кабинет</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Arial;
+            background-color: #f5f5f5;
+        }
+        nav {
+            background: #007bff;
+            padding: 1rem;
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+        nav button {
+            padding: 0.5rem 1rem;
+            background: white;
+            color: #007bff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .profile-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            padding: 2rem;
+        }
+        .profile-info {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            width: 300px;
+            text-align: center;
+        }
+        .profile-info h2 {
+            margin-bottom: 1rem;
+        }
+        .profile-info p {
+            margin-bottom: 1rem;
+        }
+        .logout-button {
+            padding: 0.5rem 1rem;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+         .logout-button:hover {
+            background: #c82333;
+         }
+    </style>
+</head>
+<body>
+    <nav>
+        <button onclick="location.href='index.html'">Синтез</button>
+        <button onclick="location.href='history.html'">История</button>
+        <button onclick="location.href='profile.html'">Личный кабинет</button>
+    </nav>
+
+    <div class="profile-container">
+        <div class="profile-info">
+            <h2>Личный кабинет</h2>
+            <p id="username-display">Загрузка...</p>
+            <button class="logout-button" onclick="logout()">Выйти</button>
+        </div>
+    </div>
+
+    <script>
+        async function checkAuthAndLoadProfile() {
+            try {
+                // Проверяем аутентификацию
+                const historyResponse = await fetch('http://127.0.0.1:1010/api/history');
+                if (!historyResponse.ok) {
+                    // Если не авторизован, перенаправляем на страницу входа
+                    window.location.href = 'auth.html';
+                    return;
+                }
+
+                // Если авторизован, получаем информацию о пользователе
+                const userResponse = await fetch('http://127.0.0.1:1010/api/user');
+                if (userResponse.ok) {
+                    const userData = await userResponse.json();
+                    document.getElementById('username-display').textContent = `Добро пожаловать, ${userData.username}!`;
+                } else {
+                     // Если не удалось получить данные пользователя, возможно, что-то не так с сессией
+                     window.location.href = 'auth.html';
+                }
+
+            } catch (error) {
+                console.error('Error checking auth or loading profile:', error);
+                // В случае ошибки соединения или другой ошибки, перенаправляем на страницу входа
+                window.location.href = 'auth.html';
+            }
+        }
+
+        async function logout() {
+            try {
+                const response = await fetch('http://127.0.0.1:1010/api/logout');
+                if (response.ok) {
+                    window.location.href = 'auth.html'; // Перенаправляем на страницу входа после выхода
+                } else {
+                    alert('Ошибка при выходе из системы.');
+                }
+            } catch (error) {
+                console.error('Logout error:', error);
+                alert('Произошла ошибка при выходе из системы.');
+            }
+        }
+
+        // Загружаем профиль при загрузке страницы
+        checkAuthAndLoadProfile();
+
+    </script>
+</body>
+</html> 

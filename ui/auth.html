@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Вход</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Arial;
+            background-color: #f5f5f5;
+        }
+        nav {
+            background: #007bff;
+            padding: 1rem;
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+        nav button {
+            padding: 0.5rem 1rem;
+            background: white;
+            color: #007bff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .auth-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            padding: 2rem;
+        }
+        .auth-form {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            width: 300px;
+        }
+        .auth-form input {
+            width: 100%;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .auth-form button {
+            width: 100%;
+            padding: 0.5rem;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 1rem;
+        }
+        .error-message {
+            color: red;
+            margin-top: 1rem;
+            display: none;
+        }
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 1rem;
+        }
+        .auth-tab {
+            flex: 1;
+            padding: 0.5rem;
+            text-align: center;
+            cursor: pointer;
+            border-bottom: 2px solid #ddd;
+        }
+        .auth-tab.active {
+            border-bottom-color: #007bff;
+            color: #007bff;
+        }
+        .auth-content {
+            display: none;
+        }
+        .auth-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <button onclick="location.href='index.html'">Синтез</button>
+        <button onclick="location.href='history.html'">История</button>
+        <button onclick="location.href='auth.html'">Личный кабинет</button>
+    </nav>
+
+    <div class="auth-container">
+        <div class="auth-form">
+            <div class="auth-tabs">
+                <div class="auth-tab active" onclick="switchTab('login')">Вход</div>
+                <div class="auth-tab" onclick="switchTab('register')">Регистрация</div>
+            </div>
+            
+            <div id="login-content" class="auth-content active">
+                <h2>Вход</h2>
+                <input type="text" id="login-username" placeholder="Логин">
+                <input type="password" id="login-password" placeholder="Пароль">
+                <button onclick="login()">Войти</button>
+                <div id="login-error" class="error-message"></div>
+            </div>
+            
+            <div id="register-content" class="auth-content">
+                <h2>Регистрация</h2>
+                <input type="text" id="register-username" placeholder="Логин">
+                <input type="password" id="register-password" placeholder="Пароль">
+                <input type="password" id="register-password-confirm" placeholder="Подтвердите пароль">
+                <button onclick="register()">Зарегистрироваться</button>
+                <div id="register-error" class="error-message"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.auth-content').forEach(c => c.classList.remove('active'));
+            
+            document.querySelector(`.auth-tab[onclick="switchTab('${tab}')"]`).classList.add('active');
+            document.getElementById(`${tab}-content`).classList.add('active');
+        }
+
+        async function login(username, password) {
+            const loginUsername = username || document.getElementById('login-username').value;
+            const loginPassword = password || document.getElementById('login-password').value;
+            const errorMessage = document.getElementById('login-error');
+
+            try {
+                const response = await fetch('http://127.0.0.1:1010/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username: loginUsername, password: loginPassword })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    window.location.href = 'index.html';
+                } else {
+                    errorMessage.textContent = data.error || 'Ошибка входа';
+                    errorMessage.style.display = 'block';
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Ошибка соединения';
+                errorMessage.style.display = 'block';
+            }
+        }
+
+        async function register() {
+            const username = document.getElementById('register-username').value;
+            const password = document.getElementById('register-password').value;
+            const passwordConfirm = document.getElementById('register-password-confirm').value;
+            const errorMessage = document.getElementById('register-error');
+
+            if (password !== passwordConfirm) {
+                errorMessage.textContent = 'Пароли не совпадают';
+                errorMessage.style.display = 'block';
+                return;
+            }
+
+            try {
+                const response = await fetch('http://127.0.0.1:1010/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    await login(username, password);
+                } else {
+                    errorMessage.textContent = data.error || 'Ошибка регистрации';
+                    errorMessage.style.display = 'block';
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Ошибка соединения';
+                errorMessage.style.display = 'block';
+            }
+        }
+
+        // Добавляем обработку Enter
+        document.getElementById('login-password').addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                login();
+            }
+        });
+
+        document.getElementById('register-password-confirm').addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                register();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TTS Система</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Arial;
+            background-color: #f5f5f5;
+        }
+        nav {
+            background: #007bff;
+            padding: 1rem;
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+        }
+        nav button {
+            padding: 0.5rem 1rem;
+            background: white;
+            color: #007bff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            padding: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <button onclick="location.href='index.html'">Синтез</button>
+        <button onclick="location.href='history.html'">История</button>
+        <button onclick="location.href='profile.html'">Личный кабинет</button>
+    </nav>
+
+    <div class="container">
+        <div class="tts-container">
+            <textarea id="input-text" placeholder="Введите текст для озвучивания..."></textarea>
+            <div class="controls">
+                <button id="synthesize-btn">Сгенерировать</button>
+                <select id="voice-select">
+                    <option value="lez">Лезгинский</option>
+                    <option value="ru">Русский</option>
+                </select>
+            </div>
+            <div id="audio-container" style="display: none;">
+                <audio id="audio-output" controls></audio>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        .tts-container {
+            width: 90%; /* Чуть больше ширины */
+            max-width: 600px;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem; /* Увеличим промежуток */
+        }
+        #input-text {
+            width: 100%;
+            min-height: 150px;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+        }
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        #synthesize-btn {
+            padding: 0.5rem 1rem;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #synthesize-btn:hover {
+            background: #0056b3;
+        }
+        #voice-select {
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        #audio-output {
+            width: 100%;
+        }
+    </style>
+
+    <script>
+        // Добавляем проверку аутентификации
+        async function checkAuth() {
+            try {
+                const response = await fetch('http://127.0.0.1:1010/api/history');
+                if (!response.ok) {
+                    window.location.href = 'auth.html';
+                }
+            } catch (error) {
+                window.location.href = 'auth.html';
+            }
+        }
+
+        // Проверяем авторизацию при загрузке страницы
+        checkAuth();
+
+        const synthesizeBtn = document.getElementById('synthesize-btn');
+        const audioContainer = document.getElementById('audio-container');
+        const audioOutput = document.getElementById('audio-output');
+        const inputText = document.getElementById('input-text');
+        const languageSelect = document.getElementById('voice-select');
+
+        const synthesizeSpeech = async () => {
+            const text = inputText.value;
+            const language = languageSelect.value;
+            
+            if (!text.trim()) {
+                alert('Пожалуйста, введите текст');
+                return;
+            }
+
+            synthesizeBtn.disabled = true;
+            synthesizeBtn.textContent = 'Отправка...';
+
+            try {
+                // Шаг 1: Отправляем запрос на синтез и получаем ID задачи
+                const response = await fetch('http://127.0.0.1:1010/api/synthesize', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text, language })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Ошибка при постановке задачи в очередь');
+                }
+
+                const taskData = await response.json();
+                const taskId = taskData.task_id;
+
+                synthesizeBtn.textContent = 'Генерация (ожидание)...';
+
+                // Шаг 2: Опрашиваем статус задачи
+                const pollStatus = async () => {
+                    const statusResponse = await fetch(`http://127.0.0.1:1010/api/task/${taskId}`);
+
+                    if (!statusResponse.ok) {
+                         const errorData = await statusResponse.json();
+                         throw new Error(errorData.error || 'Ошибка при проверке статуса задачи');
+                }
+
+                    // Если задача завершена (успех или ошибка), эндпоинт вернет файл или JSON с ошибкой
+                    if (statusResponse.headers.get('Content-Type') === 'audio/wav') {
+                        // Задача успешна, получаем аудиофайл
+                        const audioBlob = await statusResponse.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioOutput.src = audioUrl;
+                audioContainer.style.display = 'block';
+                        synthesizeBtn.textContent = 'Сгенерировать';
+                        synthesizeBtn.disabled = false;
+                    } else {
+                         const statusData = await statusResponse.json();
+                         if (statusData.status === 'processing' || statusData.status === 'queued') {
+                            // Задача еще в процессе или в очереди, продолжаем опрос
+                            setTimeout(pollStatus, 2000); // Опрашиваем каждые 2 секунды
+                        } else if (statusData.status === 'error') {
+                             // Задача завершилась с ошибкой
+                            throw new Error(statusData.error || 'Неизвестная ошибка задачи');
+                        } else {
+                            // Неизвестный статус
+                            throw new Error(`Неизвестный статус задачи: ${statusData.status}`);
+                        }
+                    }
+                };
+                
+                // Запускаем опрос
+                pollStatus();
+
+            } catch (error) {
+                console.error('Ошибка при синтезе речи:', error);
+                alert(`Произошла ошибка: ${error.message}`);
+                synthesizeBtn.disabled = false;
+                synthesizeBtn.textContent = 'Сгенерировать';
+            }
+        };
+
+        synthesizeBtn.addEventListener('click', synthesizeSpeech);
+
+        inputText.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                synthesizeSpeech();
+            }
+        });
+    </script>
+</body>
+</html>
