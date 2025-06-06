@@ -175,16 +175,42 @@
                     if (statusResponse.headers.get('Content-Type') === 'audio/wav') {
                         // Задача успешна, получаем аудиофайл
                         const audioBlob = await statusResponse.blob();
-                const audioUrl = URL.createObjectURL(audioBlob);
-                audioOutput.src = audioUrl;
-                audioContainer.style.display = 'block';
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        audioOutput.src = audioUrl;
+                        audioContainer.style.display = 'block';
+
+                        // Добавляем кнопки скачивания
+                        let downloadDiv = document.getElementById('download-links');
+                        if (!downloadDiv) {
+                            downloadDiv = document.createElement('div');
+                            downloadDiv.id = 'download-links';
+                            audioContainer.appendChild(downloadDiv);
+                        }
+                        // Очищаем старые ссылки
+                        downloadDiv.innerHTML = '';
+
+                        // Используем URL аудиофайла, который уже загружен в аудиоплеер
+                        const wavLink = document.createElement('a');
+                        wavLink.href = audioUrl;
+                        wavLink.download = 'speech.wav';
+                        wavLink.textContent = 'Скачать WAV';
+
+                        const mp3Link = document.createElement('a');
+                        mp3Link.href = audioUrl.replace('.wav', '.mp3');
+                        mp3Link.download = 'speech.mp3';
+                        mp3Link.textContent = 'Скачать MP3';
+
+                        downloadDiv.appendChild(wavLink);
+                        downloadDiv.appendChild(document.createTextNode(' | '));
+                        downloadDiv.appendChild(mp3Link);
+
                         synthesizeBtn.textContent = 'Сгенерировать';
                         synthesizeBtn.disabled = false;
                     } else {
                          const statusData = await statusResponse.json();
                          if (statusData.status === 'processing' || statusData.status === 'queued') {
                             // Задача еще в процессе или в очереди, продолжаем опрос
-                            setTimeout(pollStatus, 2000); // Опрашиваем каждые 2 секунды
+                            setTimeout(pollStatus, 1000); // Опрашиваем каждые 1 секунды
                         } else if (statusData.status === 'error') {
                              // Задача завершилась с ошибкой
                             throw new Error(statusData.error || 'Неизвестная ошибка задачи');

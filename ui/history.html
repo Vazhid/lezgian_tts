@@ -133,6 +133,10 @@
                                     <audio controls>
                                         <source src="${item.audio_path}" type="audio/wav">
                                     </audio>
+                                    <div>
+                                        <a href="${item.audio_path}?format=wav" download>Скачать WAV</a> |
+                                        <a href="${item.audio_path}?format=mp3" download>Скачать MP3</a>
+                                    </div>
                                 `;
                             } else if (item.status !== 'success') {
                                 // Отображаем статус обработки или ошибку, если аудио нет и статус не "success"

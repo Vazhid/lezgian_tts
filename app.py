@@ -1,5 +1,5 @@
 from flask import Flask, request, send_file, jsonify
-from lezgian_tts import LezgianTTS
+from lezgian_tts import LezgianTTS, AudioManager, TaskManager, DatabaseManager
 import os
 import tempfile
 import logging
@@ -12,6 +12,8 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 import psycopg2
 from werkzeug.security import generate_password_hash, check_password_hash
 from pathlib import Path
+from pydub import AudioSegment
+import io
 
 def setup_logger():
     logger = logging.getLogger('LezgianTTSApp')
@@ -37,13 +39,6 @@ app.secret_key = os.urandom(24)
 login_manager = LoginManager()
 login_manager.init_app(app)
 
-tts = LezgianTTS(logger=logger)
-
-executor = ThreadPoolExecutor(max_workers=4)
-
-task_results = {}
-task_lock = threading.Lock()
-
 db_config = {
     "host": os.getenv("DB_HOST", "localhost"),
     "port": os.getenv("DB_PORT", "5432"),
@@ -54,6 +49,16 @@ db_config = {
 
 AUDIO_HISTORY_DIR = Path(__file__).parent / 'audio_history'
 AUDIO_HISTORY_DIR.mkdir(exist_ok=True)
+
+tts = LezgianTTS(logger=logger)
+audio_manager = AudioManager(AUDIO_HISTORY_DIR)
+db_manager = DatabaseManager(db_config)
+task_manager = TaskManager(tts, audio_manager, db_manager)
+
+executor = ThreadPoolExecutor(max_workers=4)
+
+task_results = {}
+task_lock = threading.Lock()
 
 class User(UserMixin):
     def __init__(self, id, username):
@@ -205,151 +210,6 @@ def get_history():
         if 'conn' in locals():
             conn.close()
 
-def process_synthesis(text, language, task_id, request_db_id):
-    """Функция для обработки синтеза речи в отдельном потоке"""
-    start_time = datetime.now()
-    output_filepath = None
-    
-    if request_db_id is not None:
-        conn = None
-        cur = None
-        try:
-            conn = psycopg2.connect(**db_config)
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE SpeechSynthesisRequest
-                SET status = %s, processing_start_dttm = %s
-                WHERE id = %s
-            """, ('processing', start_time, request_db_id))
-            conn.commit()
-            logger.info(f"Updated status for DB request {request_db_id} to 'processing'")
-        except Exception as db_err:
-            logger.error(f"Error updating status to 'processing' for DB request {request_db_id}: {str(db_err)}")
-        finally:
-            if cur:
-                cur.close()
-            if conn:
-                conn.close()
-
-    try:
-        logger.info(f"Processing synthesis task {task_id} (DB ID: {request_db_id}) for text: '{text[:50]}...' (language: {language})")
-        
-        output_filename = f'{task_id}.wav'
-        output_filepath = AUDIO_HISTORY_DIR / output_filename
-        
-        if not tts.save_to_file(text, str(output_filepath)):
-            logger.error(f"Failed to synthesize speech for task {task_id} (DB ID: {request_db_id})")
-            
-            if request_db_id is not None:
-                 conn = None
-                 cur = None
-                 try:
-                     conn = psycopg2.connect(**db_config)
-                     cur = conn.cursor()
-                     cur.execute("""
-                         UPDATE SpeechSynthesisRequest
-                         SET status = %s, processing_end_dttm = %s
-                         WHERE id = %s
-                     """, ('error', datetime.now(), request_db_id))
-                     conn.commit()
-                     logger.info(f"Updated status for DB request {request_db_id} to 'error'")
-                 except Exception as db_err:
-                     logger.error(f"Error updating status to 'error' for DB request {request_db_id}: {str(db_err)}")
-                 finally:
-                     if cur:
-                         cur.close()
-                     if conn:
-                         conn.close()
-
-            with task_lock:
-                task_results[task_id] = {'status': 'error', 'error': 'Ошибка синтеза речи'}
-            if output_filepath and output_filepath.exists():
-                try:
-                    output_filepath.unlink()
-                    logger.debug(f"Removed incomplete audio file: {output_filepath}")
-                except Exception as e:
-                    logger.error(f"Error removing incomplete audio file: {str(e)}")
-
-            return
-        
-        try:
-            with open(output_filepath, 'rb') as f:
-                audio_data = f.read()
-        except Exception as e:
-             logger.error(f"Error reading audio file {output_filepath}: {str(e)}")
-             audio_data = None
-
-        duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Task {task_id} (DB ID: {request_db_id}) completed in {duration:.2f} seconds")
-        
-        if request_db_id is not None:
-             conn = None
-             cur = None
-             try:
-                 conn = psycopg2.connect(**db_config)
-                 cur = conn.cursor()
-                 
-                 cur.execute("""
-                     UPDATE SpeechSynthesisRequest
-                     SET status = %s, processing_end_dttm = %s
-                     WHERE id = %s
-                 """, ('success', datetime.now(), request_db_id))
-                 
-                 relative_filepath = str(output_filepath.relative_to(Path(__file__).parent))
-                 cur.execute("""
-                     INSERT INTO SpeechSynthesisResult 
-                     (request_id, audio_file_path, duration_seconds, characters_processed)
-                     VALUES (%s, %s, %s, %s)
-                 """, (request_db_id, relative_filepath, duration, len(text)))
-
-                 conn.commit()
-                 logger.info(f"Updated status for DB request {request_db_id} to 'success' and saved result")
-             except Exception as db_err:
-                 logger.error(f"Error updating status to 'success' and saving result for DB request {request_db_id}: {str(db_err)}")
-             finally:
-                 if cur:
-                     cur.close()
-                 if conn:
-                     conn.close()
-
-        with task_lock:
-            task_results[task_id] = {
-                'status': 'success',
-                'audio_data': audio_data,
-                'duration': duration,
-                'audio_path': str(output_filepath.relative_to(AUDIO_HISTORY_DIR))
-            }
-    
-    except Exception as e:
-        logger.error(f"Error in synthesis task {task_id} (DB ID: {request_db_id}): {str(e)}", exc_info=True)
-        
-        if request_db_id is not None:
-             conn = None
-             cur = None
-             try:
-                 conn = psycopg2.connect(**db_config)
-                 cur = conn.cursor()
-                 cur.execute("""
-                     UPDATE SpeechSynthesisRequest
-                     SET status = %s, processing_end_dttm = %s
-                     WHERE id = %s
-                 """, ('error', datetime.now(), request_db_id))
-                 conn.commit()
-                 logger.info(f"Updated status for DB request {request_db_id} to 'error' due to exception")
-             except Exception as db_err:
-                 logger.error(f"Error updating status to 'error' after exception for DB request {request_db_id}: {str(db_err)}")
-             finally:
-                 if cur:
-                     cur.close()
-                 if conn:
-                     conn.close()
-
-        with task_lock:
-            task_results[task_id] = {'status': 'error', 'error': str(e)}
-    
-    finally:
-        pass
-
 @app.before_request
 def log_request():
     logger.info(f"Request: {request.method} {request.path}")
@@ -380,35 +240,8 @@ def synthesize():
         user_id = current_user.id
         
         task_id = str(uuid.uuid4())
-        
-        conn = None
-        cur = None
-        try:
-            conn = psycopg2.connect(**db_config)
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO SpeechSynthesisRequest 
-                (user_id, input_text, status, create_dttm, language_code)
-                VALUES (%s, %s, %s, %s, %s) RETURNING id
-            """, (user_id, text, 'queued', datetime.now(), language))
-            
-            request_db_id = cur.fetchone()[0]
-            conn.commit()
-            logger.info(f"Created DB entry for synthesis request {request_db_id} (Task ID: {task_id})")
-            
-        except Exception as db_err:
-            logger.error(f"Error saving synthesis request to DB: {str(db_err)}")
-            request_db_id = None
-            
-        finally:
-            if cur:
-                cur.close()
-            if conn:
-                conn.close()
-
         logger.info(f"Queueing synthesis task {task_id} for text: '{text[:50]}...' (language: {language})")
-        
-        executor.submit(process_synthesis, text, language, task_id, request_db_id)
+        task_manager.submit_task(task_id, text, language, user_id)
         
         return jsonify({
             'task_id': task_id,
@@ -422,8 +255,8 @@ def synthesize():
 @app.route('/api/task/<task_id>', methods=['GET'])
 def get_task_status(task_id):
     try:
-        with task_lock:
-            result = task_results.get(task_id)
+        with task_manager.task_lock:
+            result = task_manager.task_results.get(task_id)
         
         if result is None:
             return jsonify({
@@ -437,7 +270,7 @@ def get_task_status(task_id):
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
             temp_file.write(result['audio_data'])
             temp_path = temp_file.name
-            
+        
         response = send_file(
             temp_path,
             mimetype='audio/wav',
@@ -447,8 +280,8 @@ def get_task_status(task_id):
         
         os.unlink(temp_path)
         
-        with task_lock:
-            task_results.pop(task_id, None)
+        with task_manager.task_lock:
+            task_manager.task_results.pop(task_id, None)
         
         return response
     
@@ -492,34 +325,60 @@ def serve_audio(filename):
     cur = None
     is_authorized = False
     try:
-        conn = psycopg2.connect(**db_config)
-        cur = conn.cursor()
-        cur.execute("""
+        # Using db_manager to check access
+        # NOTE: This check still opens a new connection. For better performance
+        # especially if this endpoint is hit often, consider passing a connection
+        # or using a connection pool properly.
+        result = db_manager.execute_query(
+            """
             SELECT 1
             FROM SpeechSynthesisResult res
             JOIN SpeechSynthesisRequest req ON res.request_id = req.id
             WHERE res.audio_file_path = %s AND req.user_id = %s
-        """, (str(Path('audio_history') / filename), current_user.id))
-        
-        if cur.fetchone():
+            """,
+            (str(Path('audio_history') / filename), current_user.id)
+        )
+        if result and len(result) > 0:
             is_authorized = True
 
     except Exception as db_err:
         logger.error(f"Error checking audio file access for user {current_user.id}: {str(db_err)}")
-
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
+        return jsonify({'error': 'Database error checking access'}), 500
 
     if not is_authorized:
          return jsonify({'error': 'Unauthorized access to audio file'}), 403
 
-    if audio_file_path.exists():
-        return send_file(str(audio_file_path), mimetype='audio/wav')
-    else:
+    if not audio_file_path.exists():
         return jsonify({'error': 'Audio file not found'}), 404
+
+    requested_format = request.args.get('format', 'wav').lower()
+    original_format = audio_file_path.suffix[1:].lower()
+
+    if requested_format == original_format:
+        # Serve original file
+        mimetype = f'audio/{original_format}'
+        download_name = f'speech.{original_format}'
+        return send_file(str(audio_file_path), mimetype=mimetype, as_attachment=True, download_name=download_name)
+    elif requested_format == 'mp3' and original_format == 'wav':
+        # Convert WAV to MP3 and serve
+        try:
+            audio = AudioSegment.from_wav(audio_file_path)
+            mp3_buffer = io.BytesIO()
+            audio.export(mp3_buffer, format='mp3')
+            mp3_buffer.seek(0)
+            
+            mimetype = 'audio/mpeg'
+            download_name = f'speech.mp3'
+            return send_file(mp3_buffer, mimetype=mimetype, as_attachment=True, download_name=download_name)
+        except FileNotFoundError:
+             logger.error("ffmpeg not found. Cannot convert to MP3.")
+             return jsonify({'error': 'Audio conversion failed: ffmpeg not found.'}), 500
+        except Exception as e:
+            logger.error(f"Error during WAV to MP3 conversion: {str(e)}")
+            return jsonify({'error': 'Audio conversion failed.'}), 500
+    else:
+        # Unsupported conversion or format
+        return jsonify({'error': f'Unsupported format conversion requested: {original_format} to {requested_format}'}), 400
 
 if __name__ == '__main__':
     logger.info("Starting application")
